@@ -8,7 +8,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.schemas import ActionPayload, ActionResult, EntryPayload, PageResult
+from app.schemas import (
+    ActionPayload, ActionResult, EntryPayload, PageResult,
+    ReconsiderationPayload, WorkfrontCompletePayload, WorkfrontPayload,
+)
 from app.services import SERVICE_INSTANCES, service_for
 from app.store import store
 
@@ -20,6 +23,66 @@ def require_service(module: str):
     if service is None:
         raise HTTPException(status_code=404, detail=f"未知业务模块：{module}")
     return service
+
+
+# ── 方案复议范围与现场凭据接口 ──
+# 必须注册在 /{module} 之前，否则会被动态路径抢先匹配。
+
+@router.get("/restoration_plan/{entry_id}/reconsideration-scope")
+def plan_reconsideration_scope(entry_id: int) -> dict[str, Any]:
+    """评审清单与方案审批共用的复议范围：有效工艺、待审工艺和指向的意见。"""
+    service = require_service("restoration_plan")
+    scope = service.reconsideration_scope(entry_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail=f"修缮方案 {entry_id} 不存在或已归档")
+    return scope
+
+
+@router.get("/restoration_plan/{entry_id}/approval-preview")
+def plan_approval_preview(entry_id: int) -> dict[str, Any]:
+    """本次批准将留下哪些有效工艺依据、哪些工艺仍在复议待审。"""
+    service = require_service("restoration_plan")
+    preview = service.approval_preview(entry_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail=f"修缮方案 {entry_id} 不存在或已归档")
+    return preview
+
+
+@router.get("/restoration_plan/{entry_id}/craft-clearance")
+def plan_craft_clearance(entry_id: int, craft: str = Query(...)) -> dict[str, Any]:
+    """按工艺查现场可用的审批凭据：有效 / 待重新审核 / 未批准。"""
+    service = require_service("restoration_plan")
+    scope = service.craft_clearance(entry_id, craft)
+    if scope is None:
+        raise HTTPException(status_code=404, detail=f"修缮方案 {entry_id} 不存在或已归档")
+    return scope
+
+
+@router.post("/restoration_plan/{entry_id}/workfront", response_model=ActionResult)
+def issue_workfront(entry_id: int, payload: WorkfrontPayload) -> ActionResult:
+    """施工方领取作业面：只接受当时实际有效的审批批次依据。"""
+    service = require_service("restoration_plan")
+    record, message = service.issue_workfront(
+        entry_id, payload.craft, payload.recipient, payload.note or "")
+    return ActionResult(ok=record is not None, message=message, entry=record)
+
+
+@router.post("/expert_review/{entry_id}/reconsideration", response_model=ActionResult)
+def request_reconsideration(entry_id: int, payload: ReconsiderationPayload) -> ActionResult:
+    """专家复议入口：指向一条已汇总意见和具体工艺，重复提交只产生一份回执。"""
+    service = require_service("expert_review")
+    entry, message = service.request_reconsideration(
+        entry_id, payload.craft, payload.remark or "")
+    return ActionResult(ok=entry is not None, message=message, entry=entry)
+
+
+@router.post("/restoration_plan/{entry_id}/workfront/complete", response_model=ActionResult)
+def complete_workfront(entry_id: int, payload: WorkfrontCompletePayload) -> ActionResult:
+    """完成已受理交接：复议不追溯撤销复议前按有效凭据受理的交接。"""
+    service = require_service("restoration_plan")
+    record, message = service.complete_workfront(
+        entry_id, payload.workfront_id, payload.craft, payload.recipient)
+    return ActionResult(ok=record is not None, message=message, entry=record)
 
 
 @router.get("/{module}", response_model=PageResult[dict])

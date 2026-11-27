@@ -1,6 +1,14 @@
 import { request } from './client'
 import { moduleMeta } from '@/data/modules'
-import type { ActionResult, EntryRow, OverviewResult, PageResult } from '@/data/types'
+import type {
+  AcceptanceResult,
+  ActionResult,
+  CraftClearance,
+  EntryRow,
+  OverviewResult,
+  PageResult,
+  ReconsiderationScope,
+} from '@/data/types'
 
 export { moduleMeta }
 
@@ -33,6 +41,67 @@ export async function runAction(
   const response = await request(`/api/${key}/${id}/actions`, {
     method: 'POST',
     body: JSON.stringify({ action }),
+  })
+  return await response.json()
+}
+
+export async function requestReconsideration(
+  reviewId: number,
+  craft: string,
+  remark = '',
+): Promise<ActionResult> {
+  const response = await request(`/api/expert_review/${reviewId}/reconsideration`, {
+    method: 'POST',
+    body: JSON.stringify({ craft, remark }),
+  })
+  return await response.json()
+}
+
+export async function fetchReconsiderationScope(
+  planId: number,
+): Promise<ReconsiderationScope> {
+  const response = await request(`/api/restoration_plan/${planId}/reconsideration-scope`)
+  if (!response.ok) throw new Error('复议范围读取失败')
+  return await response.json()
+}
+
+export async function fetchApprovalPreview(planId: number): Promise<ReconsiderationScope> {
+  const response = await request(`/api/restoration_plan/${planId}/approval-preview`)
+  if (!response.ok) throw new Error('审批范围读取失败')
+  return await response.json()
+}
+
+export async function fetchCraftClearance(
+  planId: number,
+  craft: string,
+): Promise<CraftClearance> {
+  const response = await request(
+    `/api/restoration_plan/${planId}/craft-clearance?craft=${encodeURIComponent(craft)}`,
+  )
+  if (!response.ok) throw new Error('工艺凭据读取失败')
+  return await response.json()
+}
+
+export async function issueWorkfront(
+  planId: number,
+  craft: string,
+  recipient: string,
+  note = '',
+): Promise<AcceptanceResult> {
+  const response = await request(`/api/restoration_plan/${planId}/workfront`, {
+    method: 'POST',
+    body: JSON.stringify({ craft, recipient, note }),
+  })
+  return await response.json()
+}
+
+export async function completeWorkfront(
+  planId: number,
+  workfrontId: number,
+): Promise<AcceptanceResult> {
+  const response = await request(`/api/restoration_plan/${planId}/workfront/complete`, {
+    method: 'POST',
+    body: JSON.stringify({ workfront_id: workfrontId }),
   })
   return await response.json()
 }

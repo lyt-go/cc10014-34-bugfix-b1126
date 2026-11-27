@@ -55,20 +55,30 @@ class Store:
         return {"cards": cards, "modules": modules}
 
     # ── 幂等性 ──
-    def idempotent_key(self, module: str, entry_id: int, action: str) -> str:
-        """生成幂等键：模块+记录+动作+小时窗口，避免同小时重复请求。"""
-        hour_window = int(time.time() / 3600)
-        return f"{module}:{entry_id}:{action}:{hour_window}"
+    def idempotent_key(
+        self, module: str, entry_id: int, action: str, scope: str = ""
+    ) -> str:
+        """生成幂等键：模块+记录+动作+业务轮次+小时窗口，避免同小时重复请求。
 
-    def check_idempotent(self, module: str, entry_id: int, action: str) -> bool:
+        scope 用于区分同一记录上的不同业务轮次（例如方案重新审批、评审复议后
+        重新汇总），轮次不同时允许再次执行，同一轮次的重复提交仍然幂等。
+        """
+        hour_window = int(time.time() / 3600)
+        return f"{module}:{entry_id}:{action}:{scope}:{hour_window}"
+
+    def check_idempotent(
+        self, module: str, entry_id: int, action: str, scope: str = ""
+    ) -> bool:
         """检查是否已在幂等窗口内执行过。返回 True 表示已执行过。"""
-        key = self.idempotent_key(module, entry_id, action)
+        key = self.idempotent_key(module, entry_id, action, scope)
         with self._lock:
             return key in self._idempotent_log
 
-    def mark_idempotent(self, module: str, entry_id: int, action: str) -> None:
+    def mark_idempotent(
+        self, module: str, entry_id: int, action: str, scope: str = ""
+    ) -> None:
         """标记动作已执行。"""
-        key = self.idempotent_key(module, entry_id, action)
+        key = self.idempotent_key(module, entry_id, action, scope)
         with self._lock:
             self._idempotent_log[key] = time.time()
             # 定期清理超过2小时的日志

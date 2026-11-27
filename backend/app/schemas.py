@@ -29,3 +29,26 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+
+
+class WorkfrontPayload(BaseModel):
+    """施工方领取作业面：必须指明工艺和领取人。"""
+
+    craft: str
+    recipient: str = ""
+    note: str | None = None
+
+
+class WorkfrontCompletePayload(BaseModel):
+    """完成作业面交接：可按交接单号，或按工艺+领取人定位已受理记录。"""
+
+    workfront_id: int | None = None
+    craft: str = ""
+    recipient: str = ""
+
+
+class ReconsiderationPayload(BaseModel):
+    """发起复议：必须指向具体已汇总意见，并限定工艺范围。"""
+
+    craft: str = ""
+    remark: str | None = None

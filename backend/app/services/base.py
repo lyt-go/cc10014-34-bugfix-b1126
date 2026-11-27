@@ -32,6 +32,12 @@ class BaseModuleService:
         """动作执行后的跨模块副作用。返回受影响的联动条目列表。"""
         return []
 
+    def idempotent_scope(
+        self, entry_id: int, action: str, entry: dict[str, Any]
+    ) -> str:
+        """动作幂等的业务轮次；轮次变化后允许再次执行同一动作。"""
+        return ""
+
     # ── 基础 CRUD ──
     def list_entries(
         self,
@@ -79,14 +85,14 @@ class BaseModuleService:
 
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
         """执行动作：幂等检查 -> 前置校验 -> 状态变更 -> 跨模块联动。"""
+        entry = store.find(self.MODULE, entry_id)
+        scope = self.idempotent_scope(entry_id, action, entry or {})
         # 幂等检查
-        if store.check_idempotent(self.MODULE, entry_id, action):
-            entry = store.find(self.MODULE, entry_id)
+        if store.check_idempotent(self.MODULE, entry_id, action, scope):
             if entry:
                 return entry, f"操作「{action}」已执行过，当前状态：{entry.get('status', '')}"
             return None, "操作已执行但记录可能已变更"
 
-        entry = store.find(self.MODULE, entry_id)
         if entry is None:
             return None, f"{self.ENTITY} {entry_id} 不存在或已归档"
 
@@ -113,7 +119,7 @@ class BaseModuleService:
             self.cross_module_effect(entry_id, action, entry)
 
             # 标记幂等
-            store.mark_idempotent(self.MODULE, entry_id, action)
+            store.mark_idempotent(self.MODULE, entry_id, action, scope)
             return entry, f"{self.ENTITY}已{action}"
         finally:
             store.release_resource(resource_key)

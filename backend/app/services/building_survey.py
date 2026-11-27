@@ -26,7 +26,9 @@ class BuildingSurveyService(BaseModuleService):
                 row for row in store.rows("restoration_plan")
                 if row.get("对应勘查") == str(entry_id)
             ]
-            if any(r.get("status") == "已通过" for r in related_plans):
+            if any(
+                r.get("status") in ("已通过", "部分通过") for r in related_plans
+            ):
                 return False, "存在已通过的关联修缮方案，无法退回勘查"
         return True, ""
 

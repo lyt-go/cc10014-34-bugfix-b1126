@@ -75,6 +75,106 @@
       </tbody>
     </table>
 
+    <section
+      v-if="isPlan && scope"
+      class="scope-panel"
+      data-testid="reconsideration-scope"
+    >
+      <header class="scope-head">
+        <h3>复议范围与现场凭据</h3>
+        <span class="scope-status" :data-plan-status="scope.plan_status">
+          {{ scope.plan_status }} · 审批批次 {{ scope.approval_batch }}
+        </span>
+      </header>
+      <p class="scope-note">{{ scope.message }}</p>
+      <div class="scope-grid">
+        <div>
+          <h4>评审意见与范围</h4>
+          <table class="data-table">
+            <thead>
+              <tr><th>专家</th><th>工艺</th><th>评审状态</th><th>范围状态</th><th>复议回执</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in scope.review_board.items" :key="item.意见ID">
+                <td>{{ item.专家 }}</td>
+                <td>{{ item.工艺 }}</td>
+                <td>{{ item.评审状态 }}</td>
+                <td :data-scope-state="item.范围状态">{{ item.范围状态 }}</td>
+                <td>{{ item.复议回执 || '—' }}</td>
+              </tr>
+              <tr v-if="!scope.review_board.items.length">
+                <td colspan="5" class="empty-state">暂无评审意见</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h4>现场领取作业面</h4>
+          <div class="scope-form">
+            <label>
+              <span>工艺</span>
+              <input v-model="workfrontCraft" data-testid="workfront-craft" placeholder="如 石作" />
+            </label>
+            <label>
+              <span>领取人</span>
+              <input v-model="workfrontRecipient" data-testid="workfront-recipient" placeholder="施工方" />
+            </label>
+            <button class="btn" data-testid="check-clearance" type="button" @click="checkClearance">
+              查询凭据
+            </button>
+            <button class="btn primary" data-testid="issue-workfront" type="button" @click="issueWorkfrontRow">
+              领取作业面
+            </button>
+          </div>
+          <p v-if="clearance" class="scope-note" :data-clearance="clearance.state">
+            {{ clearance.craft }}：{{ clearance.state }}
+            <template v-if="clearance.basis">
+              （意见#{{ clearance.basis.意见ID }}·{{ clearance.basis.专家 }}，审批批次{{ clearance.basis.审批批次 }}）
+            </template>
+            <template v-else-if="clearance.pending_review">
+              （回执{{ clearance.pending_review.复议回执 }}指向意见#{{ clearance.pending_review.意见ID }}）
+            </template>
+          </p>
+          <ul class="workfront-list">
+            <li v-for="item in scope.workfronts" :key="item.id">
+              {{ item.作业面 }} · {{ item.领取人 }} · {{ item.状态 }} · 依据意见#{{ item.依据意见ID }}
+              <button
+                v-if="item.状态 === '已受理'"
+                class="link"
+                type="button"
+                @click="completeWorkfrontRow(item.id)"
+              >
+                完成交接
+              </button>
+            </li>
+            <li v-if="!scope.workfronts.length" class="empty-state">尚未领取作业面</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <div v-if="showReconsider" class="modal-backdrop" data-testid="reconsider-modal">
+      <form class="modal" @submit.prevent="submitReconsider">
+        <h3>发起复议</h3>
+        <p class="page-desc">
+          指向意见 #{{ reconsiderTarget?.id }}（{{ reconsiderTarget?.专家姓名 }}）。
+          复议只重审填写的工艺范围，其他专家结论继续有效。
+        </p>
+        <label class="create-field">
+          <span>工艺范围</span>
+          <input v-model="reconsiderCraft" data-testid="reconsider-craft" required />
+        </label>
+        <label class="create-field">
+          <span>复议说明</span>
+          <input v-model="reconsiderRemark" data-testid="reconsider-remark" />
+        </label>
+        <div class="page-actions">
+          <button class="btn" type="button" @click="showReconsider = false">取消</button>
+          <button class="btn primary" data-testid="submit-reconsider" type="submit">提交复议</button>
+        </div>
+      </form>
+    </div>
+
     <div v-if="showCreate" class="modal-backdrop" data-testid="create-modal">
       <form class="modal" @submit.prevent="submitCreate">
         <h3>登记{{ meta.entity }}</h3>
@@ -101,13 +201,18 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
+  fetchCraftClearance,
+  completeWorkfront,
   createEntry,
   downloadEntries,
+  fetchReconsiderationScope,
+  issueWorkfront,
   listEntries,
   moduleMeta,
+  requestReconsideration,
   runAction as applyAction,
 } from '@/api/backend-service'
-import type { EntryRow } from '@/data/types'
+import type { CraftClearance, EntryRow, ReconsiderationScope } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
 const meta = moduleMeta(props.moduleKey)
@@ -119,6 +224,16 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const isPlan = meta.key === 'restoration_plan'
+const isReview = meta.key === 'expert_review'
+const scope = ref<ReconsiderationScope | null>(null)
+const workfrontCraft = ref('')
+const workfrontRecipient = ref('')
+const clearance = ref<CraftClearance | null>(null)
+const showReconsider = ref(false)
+const reconsiderTarget = ref<EntryRow | null>(null)
+const reconsiderCraft = ref('')
+const reconsiderRemark = ref('')
 
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
@@ -154,12 +269,70 @@ async function submitCreate() {
   finally { creating.value = false }
 }
 
+async function loadScope(row?: EntryRow) {
+  if (!isPlan) return
+  const target = row ?? rows.value.find((r) => String(r.方案编号) === 'C-37') ?? rows.value[0]
+  if (!target) { scope.value = null; return }
+  try { scope.value = await fetchReconsiderationScope(Number(target.id)) }
+  catch (e) { errorMessage.value = e instanceof Error ? e.message : '复议范围读取失败' }
+}
+
+async function checkClearance() {
+  if (!scope.value) return
+  errorMessage.value = ''
+  try {
+    clearance.value = await fetchCraftClearance(scope.value.plan_id, workfrontCraft.value)
+  } catch (e) { errorMessage.value = e instanceof Error ? e.message : '凭据查询失败' }
+}
+
+async function issueWorkfrontRow() {
+  if (!scope.value) return
+  errorMessage.value = ''
+  try {
+    const r = await issueWorkfront(
+      scope.value.plan_id, workfrontCraft.value, workfrontRecipient.value)
+    if (!r.ok) throw new Error(r.message)
+    await loadScope()
+    await checkClearance()
+  } catch (e) { errorMessage.value = e instanceof Error ? e.message : '领取失败' }
+}
+
+async function completeWorkfrontRow(id: number) {
+  if (!scope.value) return
+  errorMessage.value = ''
+  try {
+    const r = await completeWorkfront(scope.value.plan_id, id)
+    if (!r.ok) throw new Error(r.message)
+    await loadScope()
+  } catch (e) { errorMessage.value = e instanceof Error ? e.message : '交接失败' }
+}
+
+async function submitReconsider() {
+  if (!reconsiderTarget.value) return
+  errorMessage.value = ''
+  try {
+    const r = await requestReconsideration(
+      Number(reconsiderTarget.value.id), reconsiderCraft.value, reconsiderRemark.value)
+    if (!r.ok) throw new Error(r.message)
+    showReconsider.value = false
+    await reload()
+  } catch (e) { errorMessage.value = e instanceof Error ? e.message : '复议失败' }
+}
+
 async function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  if (isReview && action === '发起复议') {
+    reconsiderTarget.value = row
+    reconsiderCraft.value = String(row['工艺范围'] ?? row['专业领域'] ?? '')
+    reconsiderRemark.value = ''
+    showReconsider.value = true
+    return
+  }
   try {
     const r = await applyAction(meta.key, Number(row.id), action)
     if (!r.ok) throw new Error(r.message)
     await reload()
+    if (isPlan) await loadScope(rows.value.find((x) => x.id === row.id))
   } catch (e) { errorMessage.value = e instanceof Error ? e.message : '操作失败' }
 }
 
@@ -168,6 +341,7 @@ async function reload() {
   try {
     const payload = await listEntries(meta.key, filters.value)
     rows.value = payload.items; total.value = payload.total
+    if (isPlan) await loadScope()
   } catch (e) { errorMessage.value = e instanceof Error ? e.message : '业务列表读取失败' }
 }
 
@@ -180,4 +354,16 @@ onMounted(reload)
 .create-field { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
 .create-field span { font-size:13px; color:var(--text-secondary,#4a5568); }
 .create-field input { padding:6px 8px; border:1px solid var(--border-color,#e2e8f0); border-radius:4px; font-size:13px; }
+.scope-panel { margin-top:16px; background:#fff; border:1px solid var(--border); border-radius:8px; padding:14px; }
+.scope-head { display:flex; justify-content:space-between; align-items:center; }
+.scope-head h3 { margin:0; font-size:15px; }
+.scope-status { font-size:12px; color:var(--muted); }
+.scope-note { font-size:12px; color:var(--muted); margin:6px 0 10px; }
+.scope-grid { display:grid; grid-template-columns:1.4fr 1fr; gap:16px; }
+.scope-grid h4 { font-size:13px; margin:0 0 8px; }
+.scope-form { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:8px; }
+.scope-form label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+.scope-form input { padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; }
+.workfront-list { list-style:none; padding:0; margin:8px 0 0; font-size:12px; color:var(--muted); }
+.workfront-list li { padding:4px 0; border-bottom:1px solid #f0f2f5; }
 </style>
